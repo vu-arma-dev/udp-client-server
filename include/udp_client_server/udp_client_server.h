@@ -15,6 +15,8 @@
 // along with this program; if not, write to the Free Software
 // Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
+// EDIT TO WORK WITH WINDOWS -- Garrison Johnston 11/1/2024
+
 #ifndef SNAP_UDP_CLIENT_SERVER_H
 #define SNAP_UDP_CLIENT_SERVER_H
 
