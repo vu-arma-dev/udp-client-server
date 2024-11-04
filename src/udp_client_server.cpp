@@ -19,13 +19,13 @@
 // Reformated variable/method names to match the vanderbot_control style guide. 
 // Make all UDP sockets non-blocking
 // Andrew Orekhov, ARMA Lab, 2021
+// EDIT TO WORK WITH WINDOWS -- Garrison Johnston 11/1/2024
 
 #ifndef SNAP_UDP_CLIENT_SERVER_CPP
 #define SNAP_UDP_CLIENT_SERVER_CPP
 
 #include <udp_client_server.h>
 #include <string.h>
-#include <unistd.h>
 
 namespace udp_client_server
 {
@@ -46,7 +46,7 @@ namespace udp_client_server
  *
  * \note
  * The socket is open in this process. If you fork() or exec() then the
- * socket will be closed by the operating system.
+ * socket will be closesocketd by the operating system.
  *
  * \warning
  * We only make use of the first address found by getaddrinfo(). All
@@ -64,12 +64,22 @@ UdpClient::UdpClient(const std::string& addr, int port)
     : f_port_(port)
     , f_addr_(addr)
 {
+    
+    // Initialize Winsock
+    WSADATA wsaData;
+    int result = WSAStartup(MAKEWORD(2, 2), &wsaData);
+    if (result != 0) 
+    {
+        WSACleanup();
+        std::cerr << "WSAStartup failed with error: " << result << std::endl;
+    }
+
     char decimal_port[16];
     snprintf(decimal_port, sizeof(decimal_port), "%d", f_port_);
     decimal_port[sizeof(decimal_port) / sizeof(decimal_port[0]) - 1] = '\0';
     struct addrinfo hints;
     memset(&hints, 0, sizeof(hints));
-    hints.ai_family = AF_UNSPEC; // Allows IPv4 or IPv6
+    hints.ai_family = AF_INET; // Only IPv4
     hints.ai_socktype = SOCK_DGRAM; // Specifies UDP
     hints.ai_protocol = IPPROTO_UDP; // Specifies UDP
     int r(getaddrinfo(addr.c_str(), decimal_port, &hints, &f_addrinfo_));
@@ -77,23 +87,33 @@ UdpClient::UdpClient(const std::string& addr, int port)
     {
         throw UdpClientServerRuntimeError(("invalid address or port: \"" + addr + ":" + decimal_port + "\"").c_str());
     }
-    f_socket_ = socket(f_addrinfo_->ai_family, SOCK_DGRAM | SOCK_CLOEXEC | SOCK_NONBLOCK, IPPROTO_UDP);
-    if(f_socket_ == -1)
+    f_socket_ = socket(f_addrinfo_->ai_family, SOCK_DGRAM, IPPROTO_UDP);
+    if(f_socket_ == INVALID_SOCKET)
     {
         freeaddrinfo(f_addrinfo_);
+        WSACleanup();
         throw UdpClientServerRuntimeError(("could not create socket for: \"" + addr + ":" + decimal_port + "\"").c_str());
+    }
+
+    // Set the socket to non-blocking mode
+    u_long mode = 1; // 1 to enable non-blocking mode
+    if (ioctlsocket(f_socket_, FIONBIO, &mode) != 0) 
+    {
+        WSACleanup();
+        throw UdpClientServerRuntimeError("Failed to set non-blocking mode");
     }
 }
 
 /** \brief Clean up the UDP client object.
  *
- * This function frees the address information structure and close the socket
+ * This function frees the address information structure and closesocket the socket
  * before returning.
  */
 UdpClient::~UdpClient()
 {
     freeaddrinfo(f_addrinfo_);
-    close(f_socket_);
+    closesocket(f_socket_);
+    WSACleanup(); // Clean up Winsock resources
 }
 
 /** \brief Retrieve a copy of the socket identifier.
@@ -154,7 +174,13 @@ std::string UdpClient::getAddr() const
  */
 int UdpClient::send(const char *msg, size_t size)
 {
-    return sendto(f_socket_, msg, size, 0, f_addrinfo_->ai_addr, f_addrinfo_->ai_addrlen);
+    int bytes_sent = sendto(f_socket_, msg, size, 0, f_addrinfo_->ai_addr, f_addrinfo_->ai_addrlen);
+    if (bytes_sent == SOCKET_ERROR) 
+    {
+        int error = WSAGetLastError();
+        std::cerr << "sendto failed with error: " << error << std::endl;
+    }
+    return bytes_sent;
 }
 
 
@@ -179,7 +205,7 @@ int UdpClient::send(const char *msg, size_t size)
  *
  * \note
  * The socket is open in this process. If you fork() or exec() then the
- * socket will be closed by the operating system.
+ * socket will be closesocketd by the operating system.
  *
  * \warning
  * We only make use of the first address found by getaddrinfo(). All
@@ -197,42 +223,63 @@ UdpServer::UdpServer(const std::string& addr, int port)
     : f_port_(port)
     , f_addr_(addr)
 {
+    // Initialize Winsock
+    WSADATA wsaData;
+    int result = WSAStartup(MAKEWORD(2, 2), &wsaData);
+    if (result != 0) 
+    {
+        WSACleanup();
+        std::cerr << "WSAStartup failed with error: " << result << std::endl;
+    }
+
     char decimal_port[16];
     snprintf(decimal_port, sizeof(decimal_port), "%d", f_port_);
     decimal_port[sizeof(decimal_port) / sizeof(decimal_port[0]) - 1] = '\0';
     struct addrinfo hints;
     memset(&hints, 0, sizeof(hints));
-    hints.ai_family = AF_UNSPEC;
+    hints.ai_family = AF_INET; // Only IPv4
     hints.ai_socktype = SOCK_DGRAM;
     hints.ai_protocol = IPPROTO_UDP;
     int r(getaddrinfo(addr.c_str(), decimal_port, &hints, &f_addrinfo_));
     if(r != 0 || f_addrinfo_ == NULL)
     {
+        WSACleanup();
         throw UdpClientServerRuntimeError(("invalid address or port for UDP socket: \"" + addr + ":" + decimal_port + "\"").c_str());
     }
-    f_socket_ = socket(f_addrinfo_->ai_family, SOCK_DGRAM | SOCK_CLOEXEC | SOCK_NONBLOCK, IPPROTO_UDP);
-    if(f_socket_ == -1)
+    f_socket_ = socket(f_addrinfo_->ai_family, SOCK_DGRAM, IPPROTO_UDP);
+    if(f_socket_ == INVALID_SOCKET)
     {
         freeaddrinfo(f_addrinfo_);
+        WSACleanup();
         throw UdpClientServerRuntimeError(("could not create UDP socket for: \"" + addr + ":" + decimal_port + "\"").c_str());
     }
+    // Set the socket to non-blocking mode
+    u_long mode = 1; // 1 to enable non-blocking mode
+    if (ioctlsocket(f_socket_, FIONBIO, &mode) != 0) 
+    {
+        WSACleanup();
+        throw UdpClientServerRuntimeError("Failed to set non-blocking mode");
+    }
+
     r = bind(f_socket_, f_addrinfo_->ai_addr, f_addrinfo_->ai_addrlen);
     if(r != 0)
     {
         freeaddrinfo(f_addrinfo_);
-        close(f_socket_);
+        closesocket(f_socket_);
+        WSACleanup(); // Clean up Winsock resources
         throw UdpClientServerRuntimeError(("could not bind UDP socket with: \"" + addr + ":" + decimal_port + ". errno: " + std::to_string(errno) + "\"").c_str());
     }
 }
 
 /** \brief Clean up the UDP server.
  *
- * This function frees the address info structures and close the socket.
+ * This function frees the address info structures and closes the socket.
  */
 UdpServer::~UdpServer()
 {
     freeaddrinfo(f_addrinfo_);
-    close(f_socket_);
+    closesocket(f_socket_);
+    WSACleanup(); // Clean up Winsock resources
 }
 
 /** \brief The socket used by this UDP server.

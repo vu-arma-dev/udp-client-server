@@ -30,3 +30,7 @@
 *.exe
 *.out
 *.app
+
+# Folders not to include 
+.vscode
+[Bb]uild
